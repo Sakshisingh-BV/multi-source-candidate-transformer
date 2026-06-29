@@ -1,0 +1,6 @@
+pandas
+pydantic
+phonenumbers
+dateparser
+rapidfuzz
+jsonschema
