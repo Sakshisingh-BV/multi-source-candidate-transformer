@@ -14,7 +14,7 @@ The end-to-end flow from input source ingestion down to schema-validated JSON:
 <div align="center">
 
 ```mermaid
-flowchart TD
+flowchart LR
     %% Source Ingestion
     A[Recruiter CSV]
     B[Recruiter Notes]
