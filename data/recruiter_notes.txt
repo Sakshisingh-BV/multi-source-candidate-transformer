@@ -1,0 +1,25 @@
+Candidate: Sakshi Singh
+
+Strong backend developer with approximately 2 years of experience.
+
+Email: sakshi.singh@email.com
+Phone: +91 98765 43210
+
+Currently working at TechNova Solutions as Software Developer.
+
+Skills:
+- Python
+- SQL
+- JavaScript
+
+LinkedIn:
+https://linkedin.com/in/sakshisingh
+
+GitHub:
+https://github.com/sakshisingh
+
+Location:
+Jaipur, Rajasthan, India
+
+Notes:
+Excellent communication skills. Good understanding of REST APIs and Git.
