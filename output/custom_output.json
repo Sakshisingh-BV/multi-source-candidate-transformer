@@ -1,0 +1,43 @@
+[
+  {
+    "full_name": "Sakshi Singh",
+    "primary_email": "sakshi.s@gmail.com",
+    "phone": "+919876543210",
+    "skills": [
+      "docker",
+      "python",
+      "sql",
+      "git",
+      "javascript",
+      "react",
+      "rest apis"
+    ],
+    "overall_confidence": 1.0
+  },
+  {
+    "full_name": "Rahul Sharma",
+    "primary_email": "rahul.sharma@email.com",
+    "phone": "+919123456789",
+    "skills": [
+      "excel",
+      "python",
+      "sql",
+      "tableau",
+      "machine learning",
+      "power bi"
+    ],
+    "overall_confidence": 1.0
+  },
+  {
+    "full_name": "Priya Mehta",
+    "primary_email": "priya.mehta@work.com",
+    "phone": "+918800001111",
+    "skills": [
+      "aws",
+      "java",
+      "python",
+      "spring boot"
+    ],
+    "overall_confidence": 0.6
+  }
+]
