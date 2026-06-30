@@ -1,314 +1,136 @@
 # Multi-Source Candidate Data Transformer
 
-> A pipeline that ingests candidate data from multiple sources, merges it into one clean profile, and emits schema-valid JSON — with full provenance and confidence tracking.
-
----
-
-## Table of Contents
-
-1. [Problem Statement](#problem-statement)
-2. [Project Overview](#project-overview)
-3. [Architecture](#architecture)
-4. [Project Structure](#project-structure)
-5. [Features Implemented](#features-implemented)
-6. [Scope and Assumptions](#scope-and-assumptions)
-7. [Technologies Used](#technologies-used)
-8. [Installation](#installation)
-9. [How to Run](#how-to-run)
-10. [Example Input Files](#example-input-files)
-11. [Example Output](#example-output)
-12. [Runtime Configuration](#runtime-configuration)
-13. [Merge Strategy](#merge-strategy)
-14. [Normalization Strategy](#normalization-strategy)
-15. [Provenance and Confidence](#provenance-and-confidence)
-16. [Edge Cases Handled](#edge-cases-handled)
-17. [Validation](#validation)
-18. [Testing](#testing)
-19. [Design Trade-offs](#design-trade-offs)
-20. [Future Work](#future-work)
-21. [Conclusion](#conclusion)
-
----
-
-## Problem Statement
-
-A hiring platform ingests candidate data from many places at once — a recruiter's CSV export, free-text notes from a phone call, a LinkedIn profile, a GitHub page, and more. Each source uses its own field names, formats, and level of detail. The same person can appear in several sources with slightly different or conflicting values.
-
-Downstream products need **one clean, canonical profile per candidate**: a fixed set of fields, normalised formats, deduplicated across sources, and a clear record of where each value came from and how confident we are in it.
-
-**Wrong-but-confident is worse than honestly empty**, because a bad value silently pollutes hiring decisions.
-
-This project builds the transformer that turns those messy inputs into one trustworthy profile.
-
----
-
 ## Project Overview
 
-The transformer is a Python pipeline with a thin CLI. It accepts one or more source files and a runtime configuration, then:
+Hiring platforms receive candidate data from multiple sources — structured exports, free-text notes, and more. Each source uses different field names and formats, and the same candidate may appear across sources with conflicting values.
 
-1. **Extracts** raw candidate data from each source file
-2. **Normalises** values to canonical formats (E.164 phones, YYYY-MM dates, lowercase skill names, ISO-3166 country codes)
-3. **Groups** records by candidate name across sources
-4. **Merges** all records for the same candidate into one canonical profile with conflict resolution
-5. **Projects** the canonical profile to the requested output shape (driven by a JSON config — no code changes needed)
-6. **Validates** the output against a schema generated from that same config
-7. **Writes** a JSON array to the specified output file
-
-Sources currently supported: **Recruiter CSV** (structured) and **Recruiter Notes `.txt`** (unstructured).
+This project builds a Python pipeline that ingests data from multiple sources, normalizes it, merges conflicting records into one canonical profile per candidate, and outputs schema-validated JSON. Every field is traceable to its source, and a runtime configuration reshapes the output without code changes.
 
 ---
 
-## Architecture
+## Assignment Coverage
 
-```
- Input Files
- ┌───────────────────────────────────────────────────────┐
- │  data/sample_candidates.csv   data/recruiter_notes.txt │
- └──────────────────┬──────────────────────┬─────────────┘
-                    │                      │
-            CsvExtractor            NotesExtractor
-                    │                      │
-                    └──────────┬───────────┘
-                               │  RawRecord[]
-                           normalize()
-                               │  NormalizedRecord[]
-                       group by full_name
-                               │  {name → [NormalizedRecord]}
-                            merge()
-                               │  CanonicalProfile
-                           project()   ◄── config/*.json
-                               │  dict
-                           validate()  ◄── JSON Schema (dynamic)
-                               │
-                        output/*.json
-```
-
-**Pipeline stages and their modules:**
-
-| Stage | Module |
-|---|---|
-| Extract | `src/extractors/csv_extractor.py`, `src/extractors/notes_extractor.py` |
-| Normalise | `src/normalizer.py` |
-| Group + orchestrate | `src/pipeline.py` |
-| Merge | `src/merger.py` |
-| Project | `src/output_configurator.py` |
-| Validate | `src/validator.py` |
-| Data models | `src/models.py` |
-| CLI entry point | `main.py` |
+- **Structured source**: Recruiter CSV
+- **Unstructured source**: Recruiter Notes (.txt)
+- **Data normalization**: Phones (E.164), dates (YYYY-MM), countries (ISO-3166), skills (canonical synonyms)
+- **Canonical profile generation**: Single merged profile per candidate
+- **Conflict resolution**: Source-priority-based deterministic merge
+- **Provenance tracking**: Every field records its source and merge method
+- **Confidence scoring**: Per-skill and overall profile confidence
+- **Runtime configurable output**: Field selection, renaming, and metadata toggles via JSON config
+- **Output validation**: Dynamic JSON Schema generation and validation
+- **Graceful degradation**: Individual source failures do not crash the pipeline
 
 ---
 
 ## Project Structure
 
 ```
-multi-source-candidate-transformer/
-│
-├── main.py                         # CLI entry point (argparse, no business logic)
-├── requirements.txt
-│
-├── config/
-│   ├── default_config.json         # Full canonical schema output
-│   └── custom_config.json          # Assignment example: remapped fields, subset output
-│
-├── data/
-│   ├── sample_candidates.csv       # Structured source (3 candidates)
-│   └── recruiter_notes.txt         # Unstructured source (2 candidate blocks)
-│
-├── output/
-│   ├── default_output.json         # Generated by default config run
-│   └── custom_output.json          # Generated by custom config run
-│
-├── src/
-│   ├── models.py                   # Pydantic models: RawRecord, NormalizedRecord, CanonicalProfile
-│   ├── normalizer.py               # Normalises phones, emails, dates, skills, locations
-│   ├── merger.py                   # Merges NormalizedRecords into one CanonicalProfile
-│   ├── output_configurator.py      # Projects CanonicalProfile to requested output shape
-│   ├── validator.py                # Validates projected output against a dynamic JSON Schema
-│   ├── pipeline.py                 # Orchestrates all stages end-to-end
-│   └── extractors/
-│       ├── base.py                 # Abstract base class for all extractors
-│       ├── csv_extractor.py        # Parses recruiter CSV exports
-│       └── notes_extractor.py      # Parses free-text recruiter notes
-│
-└── tests/
-    ├── test_normalizer.py          # Unit tests for all normalizer functions
-    ├── test_merger.py              # Unit tests for merge and conflict resolution
-    ├── test_notes_extractor.py     # Unit tests for notes parsing
-    ├── test_output_configurator.py # Unit tests for projection and path resolution
-    └── test_validator.py           # Unit tests for schema generation and validation
+├── config/          # Runtime output configuration files
+├── data/            # Sample input source files
+├── docs/            # Design document (one-page technical design)
+├── output/          # Generated output JSON files
+├── src/             # Core pipeline modules (extractors, normalizer, merger, configurator, validator)
+├── tests/           # Unit tests for all pipeline modules
+├── main.py          # CLI entry point
+└── requirements.txt # Python dependencies
 ```
 
 ---
 
-## Features Implemented
+## Requirements
 
-- **Multi-source ingestion** — CSV (structured) and recruiter notes TXT (unstructured)
-- **Normalisation** — E.164 phones, YYYY-MM dates, ISO-3166 country codes, lowercase canonical skill names, lowercase email
-- **Skill synonym resolution** — `JS` → `javascript`, `ML` → `machine learning`, `K8s` → `kubernetes`, etc.
-- **Cross-source merging** — one canonical profile per candidate, with deterministic conflict resolution
-- **Skill confidence scoring** — `confidence = sources_mentioning_skill / total_sources`
-- **Provenance tracking** — every field records which source provided the value and how
-- **Overall confidence score** — proportion of key fields that are non-null/non-empty (0.0–1.0)
-- **Configurable output** — runtime JSON config selects fields, renames them, and toggles provenance/confidence without any code changes
-- **Path expressions** — `emails[0]`, `skills[].name`, `full_name` for flexible field mapping
-- **Dynamic JSON Schema validation** — schema is generated from the runtime config; validated with `jsonschema`
-- **Graceful degradation** — a missing or malformed source file never crashes the run; errors surface as warnings
-- **Thin CLI** — `argparse`-based, accepts `--sources`, `--config`, `--output`
-- **159 unit tests** across 5 test modules
-
----
-
-## Scope and Assumptions
-
-### In scope
-
-- Recruiter CSV and recruiter notes `.txt` as source types
-- All fields in the canonical schema (see [Runtime Configuration](#runtime-configuration))
-- Configurable output via JSON config with field selection, renaming, and missing-value policy
-
-### Deliberately out of scope (time-boxed)
-
-- LinkedIn, GitHub, ATS JSON, or resume PDF sources (the architecture is designed to accommodate them — see [Future Work](#future-work))
-- Fuzzy name matching for candidate grouping — grouping is by **exact normalised full name** (lowercased, stripped)
-- Authentication or API calls to external services
-- A web UI — the CLI is sufficient per the assignment
-
-### Assumptions
-
-- **Candidate identity key is `full_name`** (normalised). Records whose names match are treated as the same person.
-- **Source priority**: `recruiter_csv` (priority 1) beats `recruiter_notes` (priority 2) for conflicting scalar fields. Structured sources are considered more reliable than free text.
-- **Phone default region**: India (`IN`) — used when no country prefix is present.
-- **`years_experience`** is computed from experience date ranges when not explicitly provided.
-- **Skill confidence** of `1.0` means every source mentioned that skill; `0.5` means half the sources did.
-
----
-
-## Technologies Used
-
-| Library | Purpose |
-|---|---|
-| Python 3.10+ | Core language |
-| `pydantic >= 2.0` | Data models and type validation at each pipeline stage |
-| `phonenumbers` | E.164 phone number parsing and formatting |
-| `python-dateutil` | Flexible date string parsing → YYYY-MM |
-| `jsonschema >= 4.0` | Validating projected output against a dynamically generated JSON Schema |
-| `pytest` | Test runner |
-
-No web framework, no database, no external APIs.
+- Python 3.10+
+- Dependencies: `phonenumbers`, `python-dateutil`, `pydantic>=2.0`, `jsonschema>=4.0`, `pytest`
 
 ---
 
 ## Installation
 
 ```bash
-# 1. Clone the repository
+# Clone the repository
 git clone https://github.com/Sakshisingh-BV/multi-source-candidate-transformer.git
 cd multi-source-candidate-transformer
 
-# 2. Create and activate a virtual environment
+# Create and activate a virtual environment
 python -m venv venv
 
-# On Windows:
+# Windows
 venv\Scripts\activate
 
-# On macOS / Linux:
+# macOS / Linux
 source venv/bin/activate
 
-# 3. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ---
 
-## How to Run
+## Running the Project
 
-### Generate `output/default_output.json` — full canonical schema
-
-```bash
-python main.py \
-  --sources data/sample_candidates.csv data/recruiter_notes.txt \
-  --output output/default_output.json
-```
-
-### Generate `output/custom_output.json` — assignment example config
+### Generate Default Output (full canonical schema)
 
 ```bash
-python main.py \
-  --sources data/sample_candidates.csv data/recruiter_notes.txt \
-  --config config/custom_config.json \
-  --output output/custom_output.json
+python main.py --sources data/sample_candidates.csv data/recruiter_notes.txt --output output/default_output.json
 ```
 
-> **Windows note:** Replace `\` line continuations with a single long command or use backtick `` ` `` in PowerShell.
+Produces `output/default_output.json` — complete canonical profiles for all candidates with all fields, provenance, and confidence included.
 
-### CLI reference
+### Generate Custom Output (assignment example config)
 
-```
-usage: main.py [-h] --sources FILE [FILE ...] [--config CONFIG_JSON] --output OUTPUT_JSON
-
-arguments:
-  --sources     One or more source files (.csv or .txt)
-  --config      Runtime output config JSON (default: config/default_config.json)
-  --output      Path to write the resulting JSON array
+```bash
+python main.py --sources data/sample_candidates.csv data/recruiter_notes.txt --config config/custom_config.json --output output/custom_output.json
 ```
 
-### Expected console output
+Produces `output/custom_output.json` — a projected subset with renamed fields (`primary_email` from `emails[0]`, `phone` from `phones[0]`, flat `skills` list), confidence included, provenance excluded.
 
-```
-[INFO]  Using config : config/default_config.json
-[INFO]  Sources      : data/sample_candidates.csv, data/recruiter_notes.txt
-[INFO]  Output       : output/default_output.json
-[INFO]  Candidates   : 3
-[INFO]  Done.
-```
+### CLI Arguments
+
+| Argument | Required | Description |
+|---|---|---|
+| `--sources` | Yes | One or more source files (.csv or .txt) |
+| `--config` | No | Runtime config JSON (default: `config/default_config.json`) |
+| `--output` | Yes | Path to write the resulting JSON array |
 
 ---
 
-## Example Input Files
+## Produced Outputs
 
-### `data/sample_candidates.csv` — structured source
+### `output/default_output.json`
+- Complete canonical profile per candidate (all 13 fields)
+- Provenance array included (field, source, method)
+- Overall confidence score included
+- 3 candidates generated from the sample data
 
+### `output/custom_output.json`
+- Runtime-projected output using `config/custom_config.json`
+- Renamed fields: `primary_email`, `phone`, flat `skills` list
+- Subset of canonical profile (4 fields + confidence)
+- Provenance excluded
+- 3 candidates generated from the same data
+
+---
+
+## Walkthrough Example
+
+**Input — Sakshi Singh appears in both sources with conflicting data:**
+
+**CSV row:**
 ```
-full_name,email,phone,current_company,title,skills,location
-Sakshi Singh,sakshi.singh@email.com,+919876543210,TechNova Solutions,Software Engineer,"Python;SQL;Git;Docker","Jaipur, Rajasthan, India"
-Rahul Sharma,rahul.sharma@email.com,+919123456789,DataSoft Inc,Data Analyst,"Python;Excel;SQL;Tableau","Delhi, India"
-Priya Mehta,priya.mehta@work.com,+918800001111,CloudBase,Backend Developer,"Java;Spring Boot;AWS;Python","Mumbai, India"
+Sakshi Singh, sakshi.singh@email.com, +919876543210, TechNova Solutions, Software Engineer, "Python;SQL;Git;Docker"
 ```
 
-### `data/recruiter_notes.txt` — unstructured source (excerpt)
-
+**Notes block:**
 ```
 Candidate: Sakshi Singh
 Email: sakshi.s@gmail.com
-Phone: +91 98765 43210
-
-Spoke to Sakshi on 15 June 2025. She is currently a Senior Software Developer
-at TechNova Solutions. Has about 3 years of experience.
-
-Skills mentioned in conversation:
-- Python, JavaScript, React, SQL, REST APIs, Docker
-
+Skills: Python, JavaScript, React, SQL, REST APIs, Docker
 LinkedIn: https://linkedin.com/in/sakshisingh
-GitHub: https://github.com/sakshisingh
-
-Experience:
-- TechNova Solutions | Senior Software Developer | 2022-06 to present
-- WebStart Labs | Junior Developer | 2021-01 to 2022-05
-
-Education:
-- B.Tech Computer Science | Rajasthan Technical University | 2021
-
-Location: Jaipur, Rajasthan, India
+Experience: TechNova Solutions | Senior Software Developer | 2022-06 to present
 ```
 
-Multiple candidate blocks are separated by `---` lines. The file contains blocks for Sakshi Singh and Rahul Sharma.
-
----
-
-## Example Output
-
-### `output/default_output.json` — Sakshi Singh (full canonical schema)
-
+**Output — merged canonical profile (default config):**
 ```json
 {
   "candidate_id": "735f1a22-d1b9-42e7-9fc1-e7f53237df83",
@@ -316,299 +138,79 @@ Multiple candidate blocks are separated by `---` lines. The file contains blocks
   "emails": ["sakshi.s@gmail.com", "sakshi.singh@email.com"],
   "phones": ["+919876543210"],
   "location": { "city": "Jaipur", "region": "Rajasthan", "country": "IN" },
-  "links": {
-    "linkedin": "https://linkedin.com/in/sakshisingh",
-    "github": "https://github.com/sakshisingh",
-    "portfolio": null,
-    "other": []
-  },
   "headline": "Software Engineer",
-  "years_experience": 5.3,
   "skills": [
-    { "name": "docker",     "confidence": 1.0, "sources": ["recruiter_csv", "recruiter_notes"] },
-    { "name": "python",     "confidence": 1.0, "sources": ["recruiter_csv", "recruiter_notes"] },
-    { "name": "sql",        "confidence": 1.0, "sources": ["recruiter_csv", "recruiter_notes"] },
-    { "name": "git",        "confidence": 0.5, "sources": ["recruiter_csv"] },
-    { "name": "javascript", "confidence": 0.5, "sources": ["recruiter_notes"] }
-  ],
-  "experience": [
-    { "company": "TechNova Solutions", "title": "Senior Software Developer", "start": "2022-06", "end": null, "summary": null },
-    { "company": "WebStart Labs",      "title": "Junior Developer",          "start": "2021-01", "end": "2022-05", "summary": null }
-  ],
-  "education": [
-    { "institution": "Rajasthan Technical University", "degree": "B.Tech", "field": "Computer Science", "end_year": 2021 }
+    { "name": "python", "confidence": 1.0, "sources": ["recruiter_csv", "recruiter_notes"] },
+    { "name": "docker", "confidence": 1.0, "sources": ["recruiter_csv", "recruiter_notes"] },
+    { "name": "git",    "confidence": 0.5, "sources": ["recruiter_csv"] }
   ],
   "overall_confidence": 1.0,
   "provenance": [
-    { "field": "full_name",   "source": "recruiter_csv",                "method": "direct" },
-    { "field": "emails",      "source": "recruiter_csv,recruiter_notes", "method": "union_dedup" },
-    { "field": "skills",      "source": "all_sources",                  "method": "union_with_confidence" },
-    { "field": "experience",  "source": "all_sources",                  "method": "union_dedup_by_company_title" }
+    { "field": "full_name", "source": "recruiter_csv", "method": "direct" },
+    { "field": "emails",    "source": "recruiter_csv,recruiter_notes", "method": "union_dedup" }
   ]
 }
 ```
 
-### `output/custom_output.json` — same data, different config (all 3 candidates)
-
-```json
-[
-  {
-    "full_name": "Sakshi Singh",
-    "primary_email": "sakshi.s@gmail.com",
-    "phone": "+919876543210",
-    "skills": ["docker", "python", "sql", "git", "javascript", "react", "rest apis"],
-    "overall_confidence": 1.0
-  },
-  {
-    "full_name": "Rahul Sharma",
-    "primary_email": "rahul.sharma@email.com",
-    "phone": "+919123456789",
-    "skills": ["excel", "python", "sql", "tableau", "machine learning", "power bi"],
-    "overall_confidence": 1.0
-  },
-  {
-    "full_name": "Priya Mehta",
-    "primary_email": "priya.mehta@work.com",
-    "phone": "+918800001111",
-    "skills": ["aws", "java", "python", "spring boot"],
-    "overall_confidence": 0.6
-  }
-]
-```
-
-The same pipeline engine, two completely different output shapes — no code changes required.
+**What happened:**
+- `full_name` → CSV wins (priority 1)
+- `emails` → union from both sources, deduplicated
+- `skills` → union; `python` and `docker` appear in both → confidence `1.0`; `git` only in CSV → confidence `0.5`
+- `links` → came only from notes (CSV had none) — partial records complement each other
+- `provenance` → every field traceable to its source and merge method
 
 ---
 
-## Runtime Configuration
-
-The pipeline accepts a JSON config at runtime that reshapes the output without touching any code.
-
-### `config/default_config.json` — full canonical schema
-
-```json
-{
-  "fields": [
-    { "path": "candidate_id",     "type": "string",   "required": true },
-    { "path": "full_name",        "type": "string",   "required": true },
-    { "path": "emails",           "type": "string[]" },
-    { "path": "phones",           "type": "string[]" },
-    { "path": "location",         "type": "object"   },
-    { "path": "links",            "type": "object"   },
-    { "path": "headline",         "type": "string"   },
-    { "path": "years_experience", "type": "number"   },
-    { "path": "skills",           "type": "object[]" },
-    { "path": "experience",       "type": "object[]" },
-    { "path": "education",        "type": "object[]" }
-  ],
-  "include_confidence": true,
-  "include_provenance": true,
-  "on_missing": "null"
-}
-```
-
-### `config/custom_config.json` — assignment example: subset + field renaming
-
-```json
-{
-  "fields": [
-    { "path": "full_name",     "type": "string",   "required": true },
-    { "path": "primary_email", "from": "emails[0]", "type": "string", "required": true },
-    { "path": "phone",         "from": "phones[0]", "type": "string" },
-    { "path": "skills",        "from": "skills[].name", "type": "string[]" }
-  ],
-  "include_confidence": true,
-  "include_provenance": false,
-  "on_missing": "null"
-}
-```
-
-### Config field reference
-
-| Key | Description |
-|---|---|
-| `fields[].path` | Output key name |
-| `fields[].from` | Source path in the canonical profile (optional; defaults to `path`) |
-| `fields[].type` | Expected JSON type: `string`, `number`, `boolean`, `object`, `string[]`, `object[]` |
-| `fields[].required` | If `true`, the key must be present in the output |
-| `include_confidence` | Append `overall_confidence` to the output |
-| `include_provenance` | Append `provenance` array to the output |
-| `on_missing` | `"null"` — include key with `null`; `"omit"` — drop the key entirely |
-
-### Supported `from` path expressions
-
-| Expression | Resolves to |
-|---|---|
-| `"full_name"` | `profile["full_name"]` — simple key lookup |
-| `"emails[0]"` | `profile["emails"][0]` — first item in a list |
-| `"skills[].name"` | `[s["name"] for s in profile["skills"]]` — pluck one field from every list item |
-
----
-
-## Merge Strategy
-
-All records for the same candidate (matched by normalised full name) are merged into one `CanonicalProfile` using these deterministic policies:
-
-| Field type | Policy |
-|---|---|
-| **Scalar** (name, headline, location, years_experience) | Source-priority order: `recruiter_csv` (priority 1) beats `recruiter_notes` (priority 2). First non-null value wins. |
-| **List** (emails, phones) | Union across all sources, deduplicated, sorted alphabetically. |
-| **Skills** | Union by canonical name. `confidence = sources_mentioning / total_sources`. Sorted by confidence descending, then alphabetically. |
-| **Experience** | Union, deduplicated by exact `(company, title)` match, sorted by start date descending. |
-| **Education** | Union, deduplicated by exact `(institution, degree)` match, sorted by end year descending. |
-| **Links** | Dict merge per key (`linkedin`, `github`, `portfolio`). Higher-priority source wins per key. |
-
-**Source priority is fixed:** structured sources trump unstructured. A recruiter-entered CSV field is more reliable than free-text extraction from a phone call note.
-
----
-
-## Normalization Strategy
-
-Normalisation runs on every `RawRecord` before merging, inside `src/normalizer.py`.
-
-| Field | Normalisation applied |
-|---|---|
-| **Phone** | Parsed with `phonenumbers` → E.164 (e.g. `+919876543210`). Invalid numbers dropped. |
-| **Email** | Lowercased, stripped. Basic regex format check. Invalid emails dropped. |
-| **Date** | Parsed with `python-dateutil` → `YYYY-MM` (e.g. `2022-06`). Unparseable → `null`. |
-| **Location** | Split on commas → `{ city, region, country }`. Country mapped to ISO-3166 alpha-2. |
-| **Skills** | Lowercased + synonym map: `JS` → `javascript`, `ML` → `machine learning`, `K8s` → `kubernetes`, `React.js` → `react`, `Node` → `nodejs`, etc. |
-| **Links** | URLs classified by domain: `linkedin.com` → `linkedin`, `github.com` → `github`, others → `portfolio` or `other[]`. |
-
-Unknown or unparseable values become `null`. Values are never invented.
-
----
-
-## Provenance and Confidence
-
-### Provenance
-
-Every populated field in the canonical profile carries a provenance entry recording where its value came from:
-
-```json
-{ "field": "full_name", "source": "recruiter_csv", "method": "direct" }
-```
-
-| Method | Meaning |
-|---|---|
-| `direct` | Value taken as-is from the winning source |
-| `union_dedup` | Multiple sources contributed; values unioned and deduplicated |
-| `union_with_confidence` | Skills union with per-source counting |
-| `union_dedup_by_company_title` | Experience union, deduped by (company, title) |
-| `union_dedup_by_institution_degree` | Education union, deduped by (institution, degree) |
-| `dict_merge` | Links merged per key; higher-priority source wins |
-
-### Overall Confidence
-
-```
-overall_confidence = (populated key fields) / 10
-```
-
-The 10 key fields are: `full_name`, `emails`, `phones`, `location`, `headline`, `skills`, `experience`, `education`, `years_experience`, `links`.
-
-A candidate with all 10 fields populated scores `1.0`. Priya Mehta scores `0.6` in the sample data because she only appears in the CSV — she has no links, experience, or education extracted.
-
----
-
-## Edge Cases Handled
-
-| Edge case | How it is handled |
-|---|---|
-| **Missing source file** | `FileNotFoundError` is caught inside the extractor; a `RawRecord` with an error message is returned. The pipeline continues and surfaces the error as a CLI `[WARN]`. |
-| **Malformed or unreadable source** | Caught inside the extractor; wrapped in `RawRecord.errors`; pipeline continues. |
-| **All sources empty or failed** | `merge()` returns a minimal profile with `overall_confidence = 0.0` rather than raising. |
-| **Conflicting scalar values** | Source priority wins: CSV beats notes for any scalar field. The losing value is not discarded — it remains visible in the input `NormalizedRecord`. |
-| **Partial records completing each other** | If CSV has name+email but no links, and notes has links but no name, the final profile carries all fields from their respective sources. |
-| **Skill synonyms across sources** | Normalised before merging (`JS → javascript`, `ML → machine learning`, etc.). Synonym deduplication is free at the merge stage. |
-| **Duplicate experience / education entries** | Deduplicated by exact `(company, title)` or `(institution, degree)` match. |
-| **Phone with spaces or dashes** | `phonenumbers` handles `+91 98765 43210` and `+91-91234-56789` identically — both produce the same E.164 string. |
-| **Candidate appears in only one source** | Merged as a group of one. No crash. |
-
----
-
-## Validation
-
-`src/validator.py` dynamically builds a JSON Schema (draft-07) from the runtime config and validates the projected output using the `jsonschema` library. No custom schema engine is used.
-
-**Type mapping — config type → JSON Schema:**
-
-| Config type | Constraint |
-|---|---|
-| `"string"` | `["string", "null"]` |
-| `"string[]"` | `["array", "null"]`, items: `string` |
-| `"number"` | `["number", "null"]` |
-| `"boolean"` | `["boolean", "null"]` |
-| `"object"` | `["object", "null"]` |
-| `"object[]"` | `["array", "null"]`, items: `object` |
-| unknown / absent | `{}` — no constraint |
-
-- All optional fields accept `null` — no false positives for `on_missing: "null"`.
-- `required: true` fields must have their key present in the output dict.
-- `additionalProperties: true` — extra keys do not trigger an error.
-- On failure, `ValidationError` is raised with a human-readable message identifying the offending field, the expected schema, and the actual value.
-- Validation failures are **non-fatal** — the output is still written with a `[WARN]` message, matching the "degrade gracefully" constraint.
-
----
-
-## Testing
+## Running Tests
 
 ```bash
-# Run the full test suite
 python -m pytest tests/ -v
 ```
 
-### Test modules
+**159 tests — all passing.**
 
-| Test file | What it covers |
-|---|---|
-| `tests/test_normalizer.py` | Phone (E.164), email, date (YYYY-MM), skill synonyms, country codes, location parsing |
-| `tests/test_merger.py` | Conflict resolution, partial record completion, empty source filtering, skill confidence scoring |
-| `tests/test_notes_extractor.py` | Block splitting, regex field extraction (name, email, phone, skills, experience, education), missing file |
-| `tests/test_output_configurator.py` | Path resolution (`simple`, `index`, `map`), field renaming via `from`, `on_missing` policy, confidence/provenance toggles |
-| `tests/test_validator.py` | Schema generation, all 6 type mappings, valid outputs, type violations, required-field violations, error message quality |
-
-**Total: 159 tests — all passing.**
+Tests cover: normalizer, merger, notes extractor, output configurator, and validator.
 
 ---
 
-## Design Trade-offs
+## Assumptions
 
-These decisions were made intentionally to keep the implementation clean and explainable within the time box.
-
-| Decision | Rationale |
-|---|---|
-| **Exact name-based candidate grouping** | Fuzzy matching adds significant complexity for marginal benefit at this scale. Exact normalised name is simple, deterministic, and easy to explain. |
-| **Fixed source priority (CSV > notes)** | Structured sources are empirically more reliable than free-text extraction. A configurable priority list would add a layer not needed for this assignment. |
-| **Regex-based notes extraction (no NLP)** | The notes file has a semi-structured format. Regex is sufficient, transparent, and fully testable. NLP would be over-engineering here. |
-| **Extractor registry as a dict, not a class** | Adding a registry abstraction or plugin system adds indirection without improving readability at this scale. `_EXTRACTOR_MAP` in `pipeline.py` is enough. |
-| **UUID4 as `candidate_id`** | A stable ID requires a persistent identity store. UUID is correct for a stateless, single-run transformer. |
-| **Non-fatal validation** | A projected output that fails validation is still included in the results with a `[WARN]`, rather than aborting the entire run. This matches the "degrade gracefully" constraint. |
+- **Candidate identity**: Matched by exact normalized full name (lowercased, stripped).
+- **Source priority**: `recruiter_csv` (priority 1) wins over `recruiter_notes` (priority 2) for conflicting scalar fields.
+- **Phone default region**: India (`IN`) — used when no country prefix is present.
+- **`years_experience`**: Computed from experience date ranges when not explicitly provided.
+- **Skill confidence**: `sources_mentioning_skill / total_sources`.
 
 ---
 
 ## Future Work
 
-These items were considered during design and are deliberately out of scope for this submission.
+- ATS JSON extractor (additional structured source)
+- Resume PDF/DOCX parser
+- LinkedIn / GitHub profile extractors
+- Configurable source priority via runtime config
+- Fuzzy candidate matching for name variations
+- Stable candidate IDs using hashing instead of UUID4
 
-- **Additional source types** — ATS JSON blob, LinkedIn URL (via the public API), GitHub profile URL (via the REST API), PDF/DOCX resume parsing. The `BaseExtractor` interface and `_EXTRACTOR_MAP` registry are designed to accept new sources with no changes to the pipeline or merge logic.
-- **Fuzzy candidate identity resolution** — replace exact name matching with an edit-distance or phonetic similarity approach to handle typos and name variations across sources.
-- **Configurable source priority** — allow the caller to specify the trust order of sources in the runtime config rather than hardcoding CSV > notes.
-- **Per-candidate warning scoping** — currently, extraction warnings from all source files are copied to every candidate's result. A future fix would scope each warning to the candidate it belongs to.
-- **Persistent candidate IDs** — replace UUID4 with a stable hash-based ID derived from the candidate's email, so re-running the pipeline on the same data produces the same `candidate_id`.
+---
+
+## Repository Contents
+
+This submission contains:
+
+- ✅ Source code
+- ✅ Configuration files (`config/default_config.json`, `config/custom_config.json`)
+- ✅ Sample data (`data/sample_candidates.csv`, `data/recruiter_notes.txt`)
+- ✅ Generated outputs (`output/default_output.json`, `output/custom_output.json`)
+- ✅ Tests (159 passing)
+- ✅ Design document (`docs/design_document.md`)
+
+---
+
+For more details on the design decisions, normalization strategies, and conflict resolution policy, see `docs/design_document.md` (one-page technical design).
 
 ---
 
 ## Conclusion
 
-This project implements a clean, modular, and explainable candidate data transformer that meets all core assignment requirements:
-
-- Handles at least one structured source (CSV) and one unstructured source (recruiter notes)
-- Normalises phones (E.164), dates (YYYY-MM), skills (canonical names), emails (lowercase), location (ISO-3166)
-- Merges across sources into one record with provenance and confidence populated
-- Validates output before returning it; degrades gracefully on missing or garbage sources
-- Accepts a runtime config that reshapes the output without any code changes
-- Exposes a thin CLI
-- Includes 159 unit tests covering all five pipeline modules
-- All outputs are deterministic: same inputs always produce the same output
-
-The implementation prioritises **correctness, clarity, and explainability** over breadth. Every field in the output is traceable to a source and a method.
+This project implements a clean, modular candidate data transformer that merges structured and unstructured sources into one canonical profile per candidate. Every field is traceable, every conflict is resolved deterministically, and the output shape is fully configurable at runtime. The implementation prioritizes correctness, clarity, and explainability over breadth.
