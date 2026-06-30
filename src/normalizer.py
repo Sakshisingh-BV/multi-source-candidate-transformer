@@ -187,19 +187,22 @@ def normalize(raw: RawRecord) -> NormalizedRecord:
     location = _parse_location(d.get("location") or "")
 
     # --- links ---
-    raw_urls: list[str] = d.get("urls", []) if isinstance(d.get("urls"), list) else []
-    links = _classify_links(raw_urls) if raw_urls else None
-
-    # Promote linkedin/github if extracted directly
-    if d.get("linkedin"):
-        links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
-        links["linkedin"] = d["linkedin"]
-    if d.get("github"):
-        links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
-        links["github"] = d["github"]
-    if d.get("portfolio"):
-        links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
-        links["portfolio"] = d["portfolio"]
+    # Notes extractor stores a pre-classified dict under data["links"].
+    # CSV records may store individual keys or a "urls" list.
+    if isinstance(d.get("links"), dict):
+        links = d["links"]
+    else:
+        raw_urls: list[str] = d.get("urls", []) if isinstance(d.get("urls"), list) else []
+        links = _classify_links(raw_urls) if raw_urls else None
+        if d.get("linkedin"):
+            links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
+            links["linkedin"] = d["linkedin"]
+        if d.get("github"):
+            links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
+            links["github"] = d["github"]
+        if d.get("portfolio"):
+            links = links or {"linkedin": None, "github": None, "portfolio": None, "other": []}
+            links["portfolio"] = d["portfolio"]
 
     # --- headline ---
     headline = d.get("headline") or d.get("title") or None
