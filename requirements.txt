@@ -1,4 +1,4 @@
 phonenumbers
-pydantic
-dateparser
-jsonschema
+python-dateutil
+pydantic>=2.0
+pytest

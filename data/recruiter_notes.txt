@@ -1,25 +1,50 @@
+--- Candidate Notes ---
+
 Candidate: Sakshi Singh
-
-Strong backend developer with approximately 2 years of experience.
-
-Email: sakshi.singh@email.com
+Email: sakshi.s@gmail.com
 Phone: +91 98765 43210
 
-Currently working at TechNova Solutions as Software Developer.
+Spoke to Sakshi on 15 June 2025. She is currently a Senior Software Developer (not just engineer)
+at TechNova Solutions. Has about 3 years of experience, though her resume says 2.
 
-Skills:
-- Python
-- SQL
-- JavaScript
+Skills mentioned in conversation:
+- Python, JavaScript, React, SQL, REST APIs, Docker
 
-LinkedIn:
-https://linkedin.com/in/sakshisingh
+LinkedIn: https://linkedin.com/in/sakshisingh
+GitHub: https://github.com/sakshisingh
 
-GitHub:
-https://github.com/sakshisingh
+Experience:
+- TechNova Solutions | Senior Software Developer | 2022-06 to present
+- WebStart Labs | Junior Developer | 2021-01 to 2022-05
 
-Location:
-Jaipur, Rajasthan, India
+Education:
+- B.Tech Computer Science | Rajasthan Technical University | 2021
 
-Notes:
-Excellent communication skills. Good understanding of REST APIs and Git.
+Location: Jaipur, Rajasthan, India
+
+Notes: Strong communication skills. Comfortable with agile teams. Open to Bangalore relocation.
+
+---
+
+Candidate: Rahul Sharma
+Email: rahul.sharma@email.com
+Phone: +91-91234-56789
+
+Rahul has solid data skills. Currently at DataSoft as a Senior Data Analyst (CSV says Data Analyst).
+Around 4 years experience in analytics.
+
+Skills: Python, SQL, Tableau, Excel, Power BI, Machine Learning
+
+LinkedIn: https://linkedin.com/in/rahulsharma-data
+Portfolio: https://rahulsharma.dev
+
+Experience:
+- DataSoft Inc | Senior Data Analyst | 2021-03 to present
+- FinMetrics | Analyst Intern | 2020-06 to 2020-12
+
+Education:
+- M.Sc Statistics | Delhi University | 2020
+
+Location: New Delhi, India
+
+Notes: Looking for ML-focused roles. Prefers remote.
