@@ -1,14 +1,38 @@
 """Merger — merges a list of NormalizedRecords (all for the same candidate)
 into one CanonicalProfile.
 
-Merge policies:
-  Scalar fields  → highest-priority non-null source wins.
-  List fields    → union across all sources, deduplicated, deterministically sorted.
-  Skills         → union by canonical name; confidence = sources_mentioning / total_sources.
-  Experience     → union, deduplicated by (company, title) exact match.
-  Education      → union, deduplicated by (institution, degree) exact match.
+Merge policies (simple, explainable, deterministic):
+
+  Edge case 1 — Conflicting scalar values:
+    Source-priority wins. recruiter_csv (priority 1) beats recruiter_notes
+    (priority 2) for any scalar field where both have a value. The losing
+    value is not discarded — it is visible in the input NormalizedRecord and
+    traceable via provenance.
+
+  Edge case 2 — Partial records completing each other:
+    Scalar merge walks sources in priority order and takes the FIRST non-null.
+    So if CSV has name+email but no links, and notes has links but no name,
+    the final profile has all three fields populated from their respective
+    sources.
+
+  Edge case 3 — Missing or garbage source:
+    A failed extraction produces a NormalizedRecord with all fields None/[].
+    _has_useful_data() filters these out before merging. If ALL records are
+    empty after filtering, merge() returns a minimal profile with
+    overall_confidence = 0.0 rather than crashing.
+
+  Edge case 4 — Skill synonyms:
+    By the time skills reach the merger they are already canonicalized by
+    normalizer.normalize_skill() ("JS" → "javascript", "ML" → "machine
+    learning", etc.). The merger simply unions canonical names and counts
+    how many sources mentioned each one, making synonym deduplication free.
+
+  List fields    → union across all sources, deduplicated, sorted.
+  Skills         → union by canonical name; confidence = sources / total.
+  Experience     → union, dedup by (company, title) exact match.
+  Education      → union, dedup by (institution, degree) exact match.
   Links          → dict merge; higher-priority source wins per key.
-  Provenance     → one entry per field recording winning source + method.
+  Provenance     → one entry per populated field.
   overall_confidence → proportion of key fields that are non-null/non-empty.
 """
 
@@ -25,7 +49,7 @@ SOURCE_PRIORITY: dict[str, int] = {
     "recruiter_notes": 2,
 }
 
-# Fields counted when computing overall_confidence.
+# Fields that count toward overall_confidence.
 _KEY_FIELDS = [
     "full_name", "emails", "phones", "location",
     "headline", "skills", "experience", "education",
@@ -34,33 +58,65 @@ _KEY_FIELDS = [
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Helper: detect empty / failed records (Edge case 3)
 # ---------------------------------------------------------------------------
 
-def _priority(record: NormalizedRecord) -> int:
-    return SOURCE_PRIORITY.get(record.source_id, 99)
+def _has_useful_data(rec: NormalizedRecord) -> bool:
+    """Return True if the record has at least one non-empty field.
+    Records produced by a failed extractor have all None/[] — skip them."""
+    return any([
+        rec.full_name,
+        rec.emails,
+        rec.phones,
+        rec.location,
+        rec.headline,
+        rec.skills,
+        rec.experience,
+        rec.education,
+        rec.years_experience is not None,
+        rec.links,
+    ])
 
+
+def _priority(rec: NormalizedRecord) -> int:
+    return SOURCE_PRIORITY.get(rec.source_id, 99)
+
+
+# ---------------------------------------------------------------------------
+# Scalar merge — Edge case 1 (conflict) + Edge case 2 (partial completion)
+# ---------------------------------------------------------------------------
 
 def _merge_scalar(
     field: str,
     records: list[NormalizedRecord],
     provenance: list[ProvenanceEntry],
 ) -> Any:
-    """Return the first non-None value from the highest-priority source."""
+    """Walk sources in priority order; return the first non-None value.
+
+    Conflict resolution: highest-priority source wins (Edge case 1).
+    Partial completion: if the winner source has None, the next source
+    fills the gap (Edge case 2). The losing value remains visible in the
+    NormalizedRecord for debugging but is not included in the final profile.
+    """
     for rec in records:
         value = getattr(rec, field, None)
         if value is not None:
-            provenance.append(ProvenanceEntry(field=field, source=rec.source_id, method="direct"))
+            provenance.append(
+                ProvenanceEntry(field=field, source=rec.source_id, method="direct")
+            )
             return value
     return None
 
+
+# ---------------------------------------------------------------------------
+# List merge — union + dedup + deterministic sort
+# ---------------------------------------------------------------------------
 
 def _merge_list(
     field: str,
     records: list[NormalizedRecord],
     provenance: list[ProvenanceEntry],
 ) -> list:
-    """Union across all sources; deduplicated and sorted for determinism."""
     seen: set = set()
     result: list = []
     sources_used: list[str] = []
@@ -74,17 +130,26 @@ def _merge_list(
                     sources_used.append(rec.source_id)
     if result:
         provenance.append(
-            ProvenanceEntry(field=field, source=",".join(sources_used), method="merged")
+            ProvenanceEntry(
+                field=field,
+                source=",".join(sources_used),
+                method="union_dedup",
+            )
         )
     return sorted(result)
 
+
+# ---------------------------------------------------------------------------
+# Links merge
+# ---------------------------------------------------------------------------
 
 def _merge_links(
     records: list[NormalizedRecord],
     provenance: list[ProvenanceEntry],
 ) -> Optional[dict]:
-    """Merge link dicts; highest-priority source wins per key."""
-    merged: dict[str, Any] = {"linkedin": None, "github": None, "portfolio": None, "other": []}
+    merged: dict[str, Any] = {
+        "linkedin": None, "github": None, "portfolio": None, "other": []
+    }
     sources_used: list[str] = []
     for rec in records:
         links = rec.links or {}
@@ -100,18 +165,23 @@ def _merge_links(
     has_any = any(merged[k] for k in ("linkedin", "github", "portfolio")) or merged["other"]
     if has_any:
         provenance.append(
-            ProvenanceEntry(field="links", source=",".join(sources_used), method="merged")
+            ProvenanceEntry(field="links", source=",".join(sources_used), method="dict_merge")
         )
         return merged
     return None
 
 
+# ---------------------------------------------------------------------------
+# Skill merge — Edge case 4 (synonyms already canonical; just count sources)
+# ---------------------------------------------------------------------------
+
 def _merge_skills(
     records: list[NormalizedRecord],
+    total_sources: int,
     provenance: list[ProvenanceEntry],
 ) -> list[SkillEntry]:
-    """Union skills by canonical name; confidence = sources_mentioning / total_sources."""
-    total = len(records)
+    """Union skills by canonical name (synonym dedup is free — normalizer
+    already ran). confidence = sources_mentioning / total_sources."""
     skill_sources: dict[str, list[str]] = {}
     for rec in records:
         for skill in rec.skills:
@@ -122,26 +192,33 @@ def _merge_skills(
     entries = [
         SkillEntry(
             name=name,
-            confidence=round(len(srcs) / total, 2),
+            confidence=round(len(srcs) / total_sources, 2),
             sources=sorted(srcs),
         )
         for name, srcs in skill_sources.items()
     ]
+    # Highest confidence first; alphabetical within the same confidence tier.
     entries.sort(key=lambda e: (-e.confidence, e.name))
 
     if entries:
         provenance.append(
-            ProvenanceEntry(field="skills", source="all_sources", method="union_with_confidence")
+            ProvenanceEntry(
+                field="skills",
+                source="all_sources",
+                method="union_with_confidence",
+            )
         )
     return entries
 
+
+# ---------------------------------------------------------------------------
+# Experience merge — union + dedup by (company, title)
+# ---------------------------------------------------------------------------
 
 def _merge_experience(
     records: list[NormalizedRecord],
     provenance: list[ProvenanceEntry],
 ) -> list[dict]:
-    """Union experience entries; deduplicate by (company, title) exact match.
-    When duplicate found, higher-priority source entry wins."""
     seen: dict[tuple, dict] = {}
     for rec in records:
         for entry in rec.experience:
@@ -151,21 +228,27 @@ def _merge_experience(
             )
             if key not in seen:
                 seen[key] = entry
-            # else: already have this entry from a higher-priority source; skip
-
+            # Duplicate from a lower-priority source → silently skip.
     result = sorted(seen.values(), key=lambda e: e.get("start") or "", reverse=True)
     if result:
         provenance.append(
-            ProvenanceEntry(field="experience", source="all_sources", method="union_dedup_by_company_title")
+            ProvenanceEntry(
+                field="experience",
+                source="all_sources",
+                method="union_dedup_by_company_title",
+            )
         )
     return result
 
+
+# ---------------------------------------------------------------------------
+# Education merge — union + dedup by (institution, degree)
+# ---------------------------------------------------------------------------
 
 def _merge_education(
     records: list[NormalizedRecord],
     provenance: list[ProvenanceEntry],
 ) -> list[dict]:
-    """Union education entries; deduplicate by (institution, degree) exact match."""
     seen: dict[tuple, dict] = {}
     for rec in records:
         for entry in rec.education:
@@ -175,22 +258,33 @@ def _merge_education(
             )
             if key not in seen:
                 seen[key] = entry
-
-    result = sorted(seen.values(), key=lambda e: str(e.get("end_year") or ""), reverse=True)
+    result = sorted(
+        seen.values(),
+        key=lambda e: str(e.get("end_year") or ""),
+        reverse=True,
+    )
     if result:
         provenance.append(
-            ProvenanceEntry(field="education", source="all_sources", method="union_dedup_by_institution_degree")
+            ProvenanceEntry(
+                field="education",
+                source="all_sources",
+                method="union_dedup_by_institution_degree",
+            )
         )
     return result
 
 
+# ---------------------------------------------------------------------------
+# Confidence
+# ---------------------------------------------------------------------------
+
 def _compute_confidence(profile_data: dict[str, Any]) -> float:
-    """Overall confidence = proportion of key fields that are non-null/non-empty."""
-    filled = 0
-    for field in _KEY_FIELDS:
-        value = profile_data.get(field)
-        if value is not None and value != [] and value != {}:
-            filled += 1
+    """overall_confidence = proportion of key fields that are non-null/non-empty.
+    Simple and explainable: a profile with all 10 key fields populated = 1.0."""
+    filled = sum(
+        1 for f in _KEY_FIELDS
+        if profile_data.get(f) not in (None, [], {})
+    )
     return round(filled / len(_KEY_FIELDS), 2)
 
 
@@ -199,17 +293,30 @@ def _compute_confidence(profile_data: dict[str, Any]) -> float:
 # ---------------------------------------------------------------------------
 
 def merge(records: list[NormalizedRecord]) -> CanonicalProfile:
-    """Merge all NormalizedRecords (same candidate, multiple sources) into one
-    CanonicalProfile.  Records are sorted by source priority before merging so
-    scalar resolution is deterministic regardless of input order."""
+    """Merge all NormalizedRecords for a single candidate into one
+    CanonicalProfile.
 
+    Graceful degradation (Edge case 3): records that contain no useful data
+    (produced by failed extractions) are filtered out before merging. If
+    nothing remains, returns a minimal empty profile with confidence = 0.0
+    rather than raising.
+    """
     if not records:
-        raise ValueError("merge() requires at least one NormalizedRecord")
+        raise ValueError("merge() requires at least one NormalizedRecord.")
 
-    sorted_records = sorted(records, key=_priority)
+    # Edge case 3: filter out empty / failed records.
+    valid = [r for r in records if _has_useful_data(r)]
+    if not valid:
+        return CanonicalProfile(
+            candidate_id=str(uuid.uuid4()),
+            overall_confidence=0.0,
+        )
+
+    sorted_records = sorted(valid, key=_priority)
+    total_sources = len(sorted_records)
     provenance: list[ProvenanceEntry] = []
 
-    # Scalar fields
+    # Scalar fields (Edge cases 1 + 2)
     full_name = _merge_scalar("full_name", sorted_records, provenance)
     headline = _merge_scalar("headline", sorted_records, provenance)
     location = _merge_scalar("location", sorted_records, provenance)
@@ -221,7 +328,7 @@ def merge(records: list[NormalizedRecord]) -> CanonicalProfile:
 
     # Composite fields
     links = _merge_links(sorted_records, provenance)
-    skills = _merge_skills(records, provenance)
+    skills = _merge_skills(sorted_records, total_sources, provenance)  # Edge case 4
     experience = _merge_experience(sorted_records, provenance)
     education = _merge_education(sorted_records, provenance)
 
